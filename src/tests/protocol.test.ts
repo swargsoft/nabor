@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { generateKeyPair, exportPublicKey, exportPrivateKey } from '@/infrastructure/crypto/webcrypto';
+import { generateKeyPair, exportPublicKey } from '@/infrastructure/crypto/webcrypto';
 import { createPacket, verifyPacket, parsePacket } from '@/infrastructure/trystero/ProtocolCodec';
 import { MessageType, PROTOCOL_VERSION } from '@/types/protocol';
 import type { HelloPayload, PingPayload } from '@/types/protocol';

@@ -16,7 +16,10 @@ const mockTransport = vi.hoisted(() => ({
   getRoomIds: vi.fn(() => ['room-1', 'room-2']),
   isInRoom: vi.fn(() => false),
   peers: {
-    getPeersInRoom: vi.fn(() => ['peer-a', 'peer-b']),
+    getPeersInRoom: vi.fn(() => [
+      { peerId: 'peer-a', roomId: 'room-1', connectedAt: 0 },
+      { peerId: 'peer-b', roomId: 'room-1', connectedAt: 0 },
+    ]),
     getPeerCount: vi.fn(() => 2),
     getPeer: vi.fn(() => undefined),
     isConnected: vi.fn(() => false),
@@ -36,7 +39,10 @@ beforeEach(() => {
   mockTransport.leaveRoom.mockResolvedValue(undefined);
   mockTransport.leaveAll.mockResolvedValue(undefined);
   mockTransport.getRoomIds.mockReturnValue(['room-1', 'room-2']);
-  mockTransport.peers.getPeersInRoom.mockReturnValue(['peer-a', 'peer-b']);
+  mockTransport.peers.getPeersInRoom.mockReturnValue([
+    { peerId: 'peer-a', roomId: 'room-1', connectedAt: 0 },
+    { peerId: 'peer-b', roomId: 'room-1', connectedAt: 0 },
+  ]);
   mockTransport.onData.mockReturnValue(vi.fn());
   mockTransport.onPeerJoin.mockReturnValue(vi.fn());
   mockTransport.onPeerLeave.mockReturnValue(vi.fn());

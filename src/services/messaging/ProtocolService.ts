@@ -2,6 +2,7 @@ import { discoveryTransport } from '@/infrastructure/trystero/DiscoveryTransport
 import { createPacket, verifyPacket, parsePacket } from '@/infrastructure/trystero/ProtocolCodec';
 import { validatePacket } from '@/infrastructure/security/SecurityGuard';
 import { BlockedPeerRepository } from '@/repositories/BlockedPeerRepository';
+import type { JsonValue } from '@trystero-p2p/core';
 import type { Packet, PayloadMap } from '@/types/protocol';
 import { MessageType } from '@/types/protocol';
 import { createLogger } from '@/utils/logger';
@@ -34,7 +35,7 @@ export const ProtocolService = {
     targetPeerId?: string,
   ): Promise<void> {
     const packet = await createPacket(type, senderId, payload, privateKey);
-    discoveryTransport.send(roomId, packet as Record<string, unknown>, targetPeerId);
+    discoveryTransport.send(roomId, packet as unknown as JsonValue, targetPeerId);
     logger.debug('Packet sent', { type, roomId, targetPeerId });
   },
 

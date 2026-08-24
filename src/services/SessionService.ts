@@ -1,4 +1,4 @@
-import { deriveKeyPairFromSeed, exportPublicKey } from '@/infrastructure/crypto/webcrypto';
+import { deriveKeyPairFromSeed } from '@/infrastructure/crypto/webcrypto';
 import { DiscoveryService } from '@/services/discovery/DiscoveryService';
 import { DiscoveryStrategyRegistry } from '@/infrastructure/discovery/DiscoveryStrategyRegistry';
 import { HandshakeService } from '@/services/messaging/HandshakeService';
@@ -45,7 +45,7 @@ async function deriveSigningKey(entropyBase64: string): Promise<CryptoKey> {
   return keyPair.privateKey;
 }
 
-function getRoomForPeer(peerId: string): string | undefined {
+function getRoomForPeer(_peerId: string): string | undefined {
   // Ask the active strategy for the peer's room via the WebTorrent transport if available
   const strategy = DiscoveryStrategyRegistry.get();
   const rooms = strategy.getRoomIds();

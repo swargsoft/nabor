@@ -14,7 +14,7 @@ export function useSession() {
     try {
       const next = await SessionService.start(identity, device, profile);
       setState(next);
-    } catch (err) {
+    } catch {
       setState(SessionService.getState());
     }
   }, []);

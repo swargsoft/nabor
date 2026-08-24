@@ -1,7 +1,6 @@
 import { ProtocolService } from '@/services/messaging/ProtocolService';
 import { readFromCacheApi, writeToCacheApi } from '@/infrastructure/media/imageProcessor';
 import { MediaRepository } from '@/repositories/MediaRepository';
-import { generateId } from '@/infrastructure/crypto/webcrypto';
 import { validateMediaResponsePayload } from '@/infrastructure/security/SecurityGuard';
 import { MessageType } from '@/types/protocol';
 import type { MediaRequestPayload, MediaResponsePayload } from '@/types/protocol';

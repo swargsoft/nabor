@@ -69,7 +69,7 @@ export const MatchingService = {
     accountId: string,
     privateKey: CryptoKey,
     fromPeerId: string,
-    h3Index: string,
+    _h3Index: string,
   ): Promise<MatchResult | null> {
     // Record their like as a pending match entry
     await MatchingService._savePendingLike(fromPeerId, accountId);

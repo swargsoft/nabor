@@ -73,7 +73,7 @@ export const PairingService = {
       nonce: qrData.nonce,
     };
 
-    return new Promise(async (resolve, reject) => {
+    return new Promise<PairingResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         pendingPairs.delete(qrData.nonce);
         reject(new Error('Pairing timed out'));
@@ -85,15 +85,19 @@ export const PairingService = {
         resolve(result);
       });
 
-      await ProtocolService.send(
+      ProtocolService.send(
         qrData.roomId,
         MessageType.DEVICE_PAIR_REQUEST,
         payload,
         qrData.accountId,
         privateKey,
-      );
-
-      logger.info('Pair request sent', { deviceId: qrData.deviceId });
+      )
+        .then(() => logger.info('Pair request sent', { deviceId: qrData.deviceId }))
+        .catch((err) => {
+          clearTimeout(timer);
+          pendingPairs.delete(qrData.nonce);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
     });
   },
 

@@ -33,7 +33,7 @@ export class WebTorrentStrategy implements DiscoveryStrategy {
   async discover(room: string): Promise<Peer[]> {
     return this.transport.peers
       .getPeersInRoom(room)
-      .map((peerId) => ({ id: peerId, roomId: room }));
+      .map((peer) => ({ id: peer.peerId, roomId: room }));
   }
 
   onData(handler: (data: JsonValue, peerId: string, roomId: string) => void): () => void {

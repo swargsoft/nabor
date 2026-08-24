@@ -23,6 +23,7 @@ export class NaborDB extends Dexie {
   media!: Table<Media, string>;
   locations!: Table<Location, string>;
   discovery!: Table<Discovery, string>;
+  settings!: Table<Settings, string>;
   blockedPeers!: Table<BlockedPeer, string>;
 
   constructor() {
