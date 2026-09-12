@@ -44,7 +44,7 @@ export class WebTorrentStrategy implements DiscoveryStrategy {
     return this.transport.onPeerJoin(handler);
   }
 
-  onPeerLeave(handler: (peerId: string) => void): () => void {
+  onPeerLeave(handler: (peerId: string, roomId: string) => void): () => void {
     return this.transport.onPeerLeave(handler);
   }
 
@@ -60,7 +60,7 @@ export class WebTorrentStrategy implements DiscoveryStrategy {
     return this.transport.peers.getPeerCount();
   }
 
-  getRoomsForPeer(peerId: string): string[] {
-    return this.transport.getRoomsForPeer(peerId);
+  getRoomForPeer(peerId: string): string | undefined {
+    return this.transport.peers.getRoomForPeer(peerId);
   }
 }

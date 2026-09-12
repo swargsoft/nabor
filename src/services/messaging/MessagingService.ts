@@ -57,7 +57,8 @@ export const MessagingService = {
     accountId: string,
     privateKey: CryptoKey,
     payload: MessagePayload,
-    fromPeerId: string,
+    fromAccountId: string,
+    _transportPeerId?: string,
   ): Promise<Message> {
     const guard = validateMessagePayload(payload);
     if (!guard.valid) throw new Error(`Invalid message payload: ${guard.reason}`);
@@ -66,7 +67,7 @@ export const MessagingService = {
     const message: Message = {
       id: payload.messageId,
       conversationId: payload.conversationId,
-      senderId: fromPeerId,
+      senderId: fromAccountId,
       text: payload.text,
       status: 'delivered',
       createdAt: now,
@@ -133,7 +134,7 @@ export const MessagingService = {
         const roomId = getRoomForPeer(peerId);
         if (!roomId) return;
         const message = await MessagingService.handleIncomingMessage(
-          roomId, accountId, privateKey, packet.payload, peerId,
+          roomId, accountId, privateKey, packet.payload, packet.senderId, peerId,
         );
         handler(message);
       },

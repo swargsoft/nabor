@@ -8,149 +8,75 @@ import type { PublicProfile } from '@/services/profile/ProfileService';
 import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('ProfileExchangeService');
-
 const REQUEST_TIMEOUT_MS = 15_000;
 
-/** In-memory cache: peerId → PublicProfile */
-const peerProfiles = new Map<string, PublicProfile>();
-
-/** Pending request resolvers: requestId → resolve fn */
+export interface DiscoveredProfile { peerId: string; roomId?: string; profile: PublicProfile; }
+const peerProfiles = new Map<string, DiscoveredProfile>();
+const accountToPeer = new Map<string, string>();
 const pendingRequests = new Map<string, (profile: PublicProfile) => void>();
+const listeners = new Set<() => void>();
+
+function emitChange(): void { listeners.forEach((listener) => listener()); }
 
 export const ProfileExchangeService = {
-  /**
-   * Sends a PROFILE_REQUEST to a peer and returns a Promise that resolves
-   * with their PublicProfile when the PROFILE_RESPONSE arrives.
-   * Rejects after timeoutMs if no response.
-   */
-  async requestProfile(
-    roomId: string,
-    senderId: string,
-    privateKey: CryptoKey,
-    targetPeerId: string,
-    timeoutMs = REQUEST_TIMEOUT_MS,
-  ): Promise<PublicProfile> {
+  async requestProfile(roomId: string, senderId: string, privateKey: CryptoKey, targetPeerId: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<PublicProfile> {
     const requestId = generateId();
     const payload: ProfileRequestPayload = { requestId };
 
-    // Send first so the requestId is in _sent before the caller reads it
-    await ProtocolService.send(roomId, MessageType.PROFILE_REQUEST, payload, senderId, privateKey, targetPeerId);
-
-    return new Promise((resolve, reject) => {
+    const promise = new Promise<PublicProfile>((resolve, reject) => {
       const timer = setTimeout(() => {
         pendingRequests.delete(requestId);
         reject(new Error(`Profile request timed out for peer ${targetPeerId}`));
       }, timeoutMs);
-
       pendingRequests.set(requestId, (profile) => {
         clearTimeout(timer);
         pendingRequests.delete(requestId);
         resolve(profile);
       });
     });
+
+    try {
+      await ProtocolService.send(roomId, MessageType.PROFILE_REQUEST, payload, senderId, privateKey, targetPeerId);
+    } catch (err) {
+      pendingRequests.delete(requestId);
+      throw err;
+    }
+    return promise;
   },
 
-  /**
-   * Handles an incoming PROFILE_REQUEST — responds with our PublicProfile.
-   */
-  async handleProfileRequest(
-    roomId: string,
-    accountId: string,
-    privateKey: CryptoKey,
-    payload: ProfileRequestPayload,
-    requesterPeerId: string,
-  ): Promise<void> {
+  async handleProfileRequest(roomId: string, accountId: string, privateKey: CryptoKey, payload: ProfileRequestPayload, requesterPeerId: string): Promise<void> {
     const profile = await ProfileService.getProfile(accountId);
-    if (!profile) {
-      logger.warn('Profile request received but no local profile exists');
-      return;
-    }
-
+    if (!profile) return;
     const pub = ProfileService.toPublicProfile(profile);
-    const response: ProfileResponsePayload = {
-      requestId: payload.requestId,
-      accountId: pub.accountId,
-      displayName: pub.displayName,
-      age: pub.age,
-      bio: pub.bio,
-      gender: pub.gender,
-      interests: pub.interests,
-      photoIds: pub.photoIds,
-    };
-
-    await ProtocolService.send(
-      roomId, MessageType.PROFILE_RESPONSE, response, accountId, privateKey, requesterPeerId,
-    );
-    logger.info('Profile response sent', { to: requesterPeerId });
+    const response: ProfileResponsePayload = { requestId: payload.requestId, accountId: pub.accountId, displayName: pub.displayName, age: pub.age, bio: pub.bio, gender: pub.gender, interests: pub.interests, photoIds: pub.photoIds };
+    await ProtocolService.send(roomId, MessageType.PROFILE_RESPONSE, response, accountId, privateKey, requesterPeerId);
   },
 
-  /**
-   * Handles an incoming PROFILE_RESPONSE — resolves any pending request
-   * and caches the profile.
-   */
-  handleProfileResponse(payload: ProfileResponsePayload, fromPeerId: string): void {
+  handleProfileResponse(payload: ProfileResponsePayload, fromPeerId: string, roomId?: string): void {
     const guard = validateProfileResponsePayload(payload);
-    if (!guard.valid) {
-      logger.warn('Invalid profile response payload', { reason: guard.reason, fromPeerId });
-      return;
-    }
-
-    const profile: PublicProfile = {
-      accountId: payload.accountId,
-      displayName: payload.displayName,
-      age: payload.age,
-      bio: payload.bio,
-      gender: payload.gender as PublicProfile['gender'],
-      interests: payload.interests,
-      photoIds: payload.photoIds,
-    };
-
-    peerProfiles.set(fromPeerId, profile);
-
+    if (!guard.valid) return;
+    const profile: PublicProfile = { accountId: payload.accountId, displayName: payload.displayName, age: payload.age, bio: payload.bio, gender: payload.gender as PublicProfile['gender'], interests: payload.interests, photoIds: payload.photoIds };
+    peerProfiles.set(fromPeerId, { peerId: fromPeerId, roomId, profile });
+    accountToPeer.set(profile.accountId, fromPeerId);
     const resolver = pendingRequests.get(payload.requestId);
     if (resolver) resolver(profile);
-
+    emitChange();
     logger.info('Profile received', { fromPeerId, accountId: payload.accountId });
   },
 
-  /**
-   * Starts listening for PROFILE_REQUEST and PROFILE_RESPONSE packets.
-   * Returns a combined unsubscribe function.
-   */
-  startListening(
-    accountId: string,
-    privateKey: CryptoKey,
-    getRoomForPeer: (peerId: string) => string | undefined,
-  ): () => void {
-    const unsubReq = ProtocolService.onMessage<ProfileRequestPayload>(
-      MessageType.PROFILE_REQUEST,
-      async ({ packet, peerId }) => {
-        const roomId = getRoomForPeer(peerId);
-        if (!roomId) return;
-        await ProfileExchangeService.handleProfileRequest(
-          roomId, accountId, privateKey, packet.payload, peerId,
-        );
-      },
-    );
-
-    const unsubRes = ProtocolService.onMessage<ProfileResponsePayload>(
-      MessageType.PROFILE_RESPONSE,
-      ({ packet, peerId }) => {
-        ProfileExchangeService.handleProfileResponse(packet.payload, peerId);
-      },
-    );
-
+  startListening(accountId: string, privateKey: CryptoKey, getRoomForPeer: (peerId: string) => string | undefined): () => void {
+    const unsubReq = ProtocolService.onMessage<ProfileRequestPayload>(MessageType.PROFILE_REQUEST, async ({ packet, peerId, roomId }) => {
+      const effectiveRoom = roomId || getRoomForPeer(peerId);
+      if (!effectiveRoom) return;
+      await ProfileExchangeService.handleProfileRequest(effectiveRoom, accountId, privateKey, packet.payload, peerId);
+    });
+    const unsubRes = ProtocolService.onMessage<ProfileResponsePayload>(MessageType.PROFILE_RESPONSE, ({ packet, peerId, roomId }) => ProfileExchangeService.handleProfileResponse(packet.payload, peerId, roomId));
     return () => { unsubReq(); unsubRes(); };
   },
 
-  /** Returns a cached peer profile, or null if not yet fetched. */
-  getCachedProfile(peerId: string): PublicProfile | null {
-    return peerProfiles.get(peerId) ?? null;
-  },
-
-  /** Clears the in-memory profile cache (used in tests / on logout). */
-  clearCache(): void {
-    peerProfiles.clear();
-    pendingRequests.clear();
-  },
+  getCachedProfile(peerId: string): PublicProfile | null { return peerProfiles.get(peerId)?.profile ?? null; },
+  getCachedProfiles(): DiscoveredProfile[] { return [...peerProfiles.values()]; },
+  getPeerIdForAccount(accountId: string): string | null { return accountToPeer.get(accountId) ?? null; },
+  onChange(listener: () => void): () => void { listeners.add(listener); return () => listeners.delete(listener); },
+  clearCache(): void { peerProfiles.clear(); accountToPeer.clear(); pendingRequests.clear(); emitChange(); },
 };

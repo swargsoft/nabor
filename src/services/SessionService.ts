@@ -35,6 +35,7 @@ const initialState: SessionState = {
 let _state: SessionState = { ...initialState };
 let _unsubscribers: Array<() => void> = [];
 let _peerCountInterval: ReturnType<typeof setInterval> | null = null;
+let _privateKey: CryptoKey | null = null;
 
 /** Derives the CryptoKey from raw base64 entropy stored in identity.privateKey. */
 async function deriveSigningKey(entropyBase64: string): Promise<CryptoKey> {
@@ -46,8 +47,7 @@ async function deriveSigningKey(entropyBase64: string): Promise<CryptoKey> {
 }
 
 function getRoomForPeer(peerId: string): string | undefined {
-  const strategy = DiscoveryStrategyRegistry.get();
-  return strategy.getRoomsForPeer?.(peerId)[0];
+  return DiscoveryStrategyRegistry.get().getRoomForPeer?.(peerId);
 }
 
 export const SessionService = {
@@ -71,8 +71,9 @@ export const SessionService = {
       // Join discovery rooms
       const ctx = await DiscoveryService.startDiscovery(identity.id);
 
-      // Start listeners BEFORE sending HELLO. This avoids dropping the first
-      // identity packet when the other peer is already connected.
+      _privateKey = privateKey;
+
+      // Start listeners BEFORE HELLO. A peer can answer immediately after connecting.
       const strategy = DiscoveryStrategyRegistry.get();
       _unsubscribers = [
         HandshakeService.startListening(identity.id, privateKey, getRoomForPeer),
@@ -81,32 +82,27 @@ export const SessionService = {
         MessagingService.onMessage(identity.id, privateKey, getRoomForPeer, () => {}),
         MessagingService.onAck(),
         MatchingService.onLike(identity.id, privateKey, '', getRoomForPeer),
-        MatchingService.onMatch(() => {}),
+        MatchingService.onMatch((payload, fromPeerId, fromAccountId) => {
+          MatchingService.acceptIncomingMatch(identity.id, payload, fromAccountId);
+          logger.info('MATCH received', { fromPeerId, fromAccountId, conversationId: payload.conversationId });
+        }),
         MessageSyncService.startListening(identity.id, privateKey, getRoomForPeer),
         strategy.onPeerJoin((peerId, roomId) => {
           ConnectionService.onPeerConnected(peerId, roomId, identity.id, privateKey);
-          // A peer that joins after our initial announcement still needs our
-          // identity. Send HELLO directly to the newly connected peer.
-          void HandshakeService.broadcastHello(
-            roomId, identity.id, publicKey, device.id, privateKey, profile?.displayName,
-          );
+          // Fetch the remote public profile as soon as WebRTC is ready.
+          ProfileExchangeService.requestProfile(roomId, identity.id, privateKey, peerId)
+            .catch((err) => logger.debug('Profile request failed', { peerId, roomId, error: String(err) }));
         }),
-        strategy.onPeerLeave((peerId) =>
-          ConnectionService.onPeerDisconnected(peerId),
-        ),
+        strategy.onPeerLeave((peerId) => ConnectionService.onPeerDisconnected(peerId)),
       ];
 
-      // Announce on every active room after listeners are ready.
+      // Announce only after listeners are installed.
       for (const roomId of ctx.activeRooms) {
-        await HandshakeService.broadcastHello(
-          roomId, identity.id, publicKey, device.id, privateKey, profile?.displayName,
-        );
+        await HandshakeService.broadcastHello(roomId, identity.id, publicKey, device.id, privateKey, profile?.displayName);
       }
 
-      // Refresh peer count every 1s so the session state becomes live quickly.
-      _peerCountInterval = setInterval(() => {
-        _state = { ..._state, ...DiscoveryService.getContext() };
-      }, 1_000);
+      // Refresh peer count every 1s while the UI is open.
+      _peerCountInterval = setInterval(() => { _state = { ..._state, ...DiscoveryService.getContext() }; }, 1_000);
 
       _state = {
         status: 'active',
@@ -144,6 +140,7 @@ export const SessionService = {
     MediaExchangeService.clearPending();
     SafetyService.clearMutes();
     ConnectionService.clear();
+    _privateKey = null;
 
     _state = { ...initialState };
     logger.info('Session stopped');
@@ -159,10 +156,31 @@ export const SessionService = {
     _state = { ..._state, ...DiscoveryService.getContext() };
   },
 
+  getDiscoveredProfiles() { return ProfileExchangeService.getCachedProfiles(); },
+
+  async likePeer(peerId: string, h3Index: string): Promise<void> {
+    if (!_privateKey || !_state.accountId) throw new Error('Session is not active');
+    const strategy = DiscoveryStrategyRegistry.get();
+    const roomId = strategy.getRoomForPeer?.(peerId);
+    const discovered = ProfileExchangeService.getCachedProfiles().find((entry) => entry.peerId === peerId);
+    if (!roomId || !discovered) throw new Error('Peer is no longer connected');
+    await MatchingService.sendLike(roomId, _state.accountId, _privateKey, discovered.profile.accountId, h3Index, peerId);
+  },
+
+  async passPeer(peerId: string, h3Index: string): Promise<void> {
+    if (!_privateKey || !_state.accountId) throw new Error('Session is not active');
+    const strategy = DiscoveryStrategyRegistry.get();
+    const roomId = strategy.getRoomForPeer?.(peerId);
+    const discovered = ProfileExchangeService.getCachedProfiles().find((entry) => entry.peerId === peerId);
+    if (!roomId || !discovered) throw new Error('Peer is no longer connected');
+    await MatchingService.sendPass(roomId, _state.accountId, _privateKey, discovered.profile.accountId, h3Index, peerId);
+  },
+
   /** Resets internal state — used in tests. */
   _reset(): void {
     _state = { ...initialState };
     _unsubscribers = [];
+    _privateKey = null;
     if (_peerCountInterval) {
       clearInterval(_peerCountInterval);
       _peerCountInterval = null;

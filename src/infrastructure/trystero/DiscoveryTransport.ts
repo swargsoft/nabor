@@ -5,11 +5,11 @@ import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('DiscoveryTransport');
 
-const APP_ID = 'swargsoft-nabor-v1';
+const APP_ID = 'nabor-v1';
 
 export type IncomingDataHandler = (data: JsonValue, peerId: string, roomId: string) => void;
 export type PeerEventHandler = (peerId: string, roomId: string) => void;
-export type PeerLeaveHandler = (peerId: string) => void;
+export type PeerLeaveHandler = (peerId: string, roomId: string) => void;
 
 export class DiscoveryTransport {
   private readonly roomManager: RoomManager;
@@ -37,8 +37,8 @@ export class DiscoveryTransport {
         this.peerJoinHandlers.forEach((h) => h(peerId, roomId));
       },
       (peerId) => {
-        this.peers.onPeerLeft(peerId, roomId);
-        this.peerLeaveHandlers.forEach((h) => h(peerId));
+        const lastRoom = this.peers.onPeerLeft(peerId, roomId);
+        if (lastRoom) this.peerLeaveHandlers.forEach((h) => h(peerId, roomId));
       },
     );
 
@@ -76,17 +76,13 @@ export class DiscoveryTransport {
   /** Registers a handler called when any peer joins any room. */
   onPeerJoin(handler: PeerEventHandler): () => void {
     this.peerJoinHandlers.push(handler);
-    return () => {
-      this.peerJoinHandlers = this.peerJoinHandlers.filter((h) => h !== handler);
-    };
+    return () => { this.peerJoinHandlers = this.peerJoinHandlers.filter((h) => h !== handler); };
   }
 
   /** Registers a handler called when any peer leaves any room. */
   onPeerLeave(handler: PeerLeaveHandler): () => void {
     this.peerLeaveHandlers.push(handler);
-    return () => {
-      this.peerLeaveHandlers = this.peerLeaveHandlers.filter((h) => h !== handler);
-    };
+    return () => { this.peerLeaveHandlers = this.peerLeaveHandlers.filter((h) => h !== handler); };
   }
 
   /**
@@ -107,8 +103,8 @@ export class DiscoveryTransport {
     return this.roomManager.isInRoom(roomId);
   }
 
-  getRoomsForPeer(peerId: string): string[] {
-    return this.peers.getRoomsForPeer(peerId);
+  getRoomForPeer(peerId: string): string | undefined {
+    return this.peers.getRoomForPeer(peerId);
   }
 }
 

@@ -34,22 +34,11 @@ export async function joinTrysteroRoom(
   logger.info('Joining room', { roomId });
 
   const iceServers = await ConnectivityService.getIceServers();
-  const room: Room = joinRoom(
-    {
-      appId: config.appId,
-      // Trickle ICE reduces time-to-connect, especially on mobile networks.
-      trickleIce: true,
-      rtcConfig: { iceServers },
-      // Keep several tracker connections for discovery robustness.
-      relayConfig: { redundancy: 3, warnOnRelayFailure: true },
+  const room: Room = joinRoom({ appId: config.appId, rtcConfig: { iceServers } }, roomId, {
+    onJoinError: (details) => {
+      logger.error('Peer join failed', { requestedRoomId: roomId, details });
     },
-    roomId,
-    {
-      onJoinError: (details) => {
-        logger.error('Peer join failed', { requestedRoomId: roomId, details });
-      },
-    },
-  );
+  });
   const action = room.makeAction<DataPayload>('data');
 
   room.onPeerJoin = (peerId: string) => {

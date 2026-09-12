@@ -3,6 +3,7 @@ import { ConversationRepository } from '@/repositories/ConversationRepository';
 import { MessagingService } from '@/services/messaging/MessagingService';
 import { SessionService } from '@/services/SessionService';
 import { discoveryTransport } from '@/infrastructure/trystero/DiscoveryTransport';
+import { ProfileExchangeService } from '@/services/profile/ProfileExchangeService';
 import { deriveKeyPairFromSeed } from '@/infrastructure/crypto/webcrypto';
 import type { Conversation, Message } from '@/types/db';
 
@@ -60,13 +61,14 @@ export function useConversation(conversationId: string | undefined) {
     const entropy = base64ToBytes(identityRecord.privateKey);
     const { privateKey } = await deriveKeyPairFromSeed(entropy);
 
-    const roomId = discoveryTransport.peers.getPeer(conversation.peerId)?.roomId;
+    const targetPeerId = ProfileExchangeService.getPeerIdForAccount(conversation.peerId) ?? conversation.peerId;
+    const roomId = discoveryTransport.peers.getPeer(targetPeerId)?.roomId;
     if (!roomId) return;
 
     setSending(true);
     try {
       const msg = await MessagingService.sendMessage(
-        roomId, identity, privateKey, conversationId, conversation.peerId, text,
+        roomId, identity, privateKey, conversationId, targetPeerId, text,
       );
       setMessages((prev) => [...prev.filter((m) => m.id !== msg.id), msg]);
     } finally {
@@ -85,10 +87,11 @@ export function useConversation(conversationId: string | undefined) {
 
     const entropy = base64ToBytes(identityRecord.privateKey);
     const { privateKey } = await deriveKeyPairFromSeed(entropy);
-    const roomId = discoveryTransport.peers.getPeer(conversation.peerId)?.roomId;
+    const targetPeerId = ProfileExchangeService.getPeerIdForAccount(conversation.peerId) ?? conversation.peerId;
+    const roomId = discoveryTransport.peers.getPeer(targetPeerId)?.roomId;
     if (!roomId) return;
 
-    await MessagingService.markRead(roomId, state.accountId, privateKey, messageId, conversation.peerId);
+    await MessagingService.markRead(roomId, state.accountId, privateKey, messageId, targetPeerId);
     await reload();
   }, [conversation, reload]);
 
