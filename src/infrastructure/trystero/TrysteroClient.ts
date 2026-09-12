@@ -46,7 +46,7 @@ export async function joinTrysteroRoom(
     roomId,
     {
       onJoinError: (details) => {
-        logger.error('Peer join failed', { roomId, ...details });
+        logger.error('Peer join failed', { requestedRoomId: roomId, details });
       },
     },
   );
