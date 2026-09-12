@@ -71,9 +71,14 @@ export const MatchingService = {
     accountId: string,
     privateKey: CryptoKey,
     fromAccountId: string,
-    fromPeerId: string,
-    _h3Index: string,
+    fromPeerIdOrH3: string,
+    h3Index?: string,
   ): Promise<MatchResult | null> {
+    // Keep the original 5-argument API for tests/callers while allowing the
+    // transport peer id to be supplied separately from the signed account id.
+    const fromPeerId = h3Index === undefined ? fromAccountId : fromPeerIdOrH3;
+    const effectiveH3Index = h3Index === undefined ? fromPeerIdOrH3 : h3Index;
+
     // Record their like as a pending match entry
     await MatchingService._savePendingLike(fromAccountId, accountId);
 
@@ -83,7 +88,7 @@ export const MatchingService = {
       return MatchingService._createMatch(accountId, fromAccountId, roomId, privateKey, fromPeerId);
     }
 
-    logger.info('Incoming LIKE recorded', { fromPeerId });
+    logger.info('Incoming LIKE recorded', { fromPeerId, h3Index: effectiveH3Index });
     return null;
   },
 

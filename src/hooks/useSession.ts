@@ -2,24 +2,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { SessionService, type SessionState } from '@/services/SessionService';
 import type { Identity, Device, Profile } from '@/types/db';
 
-/**
- * React facade for the singleton SessionService.
- *
- * The important bit here is that SessionService owns the live P2P state, while
- * React owns a snapshot of that state. Polling the singleton keeps the UI in
- * sync when peers join/leave after the session has already started.
- */
 export function useSession() {
   const [state, setState] = useState<SessionState>(SessionService.getState());
 
+  // Sync state from service on mount and keep in sync
   useEffect(() => {
-    const sync = () => setState(SessionService.getState());
-
-    // Sync immediately, then keep the Discover screen live.
+    const sync = () => {
+      SessionService.refreshPeerCount();
+      setState(SessionService.getState());
+    };
     sync();
-    const interval = window.setInterval(sync, 1_000);
-
-    return () => window.clearInterval(interval);
+    const timer = window.setInterval(sync, 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const start = useCallback(async (identity: Identity, device: Device, profile?: Profile) => {
@@ -41,6 +35,16 @@ export function useSession() {
     setState(SessionService.getState());
   }, []);
 
+  const likePeer = useCallback(async (peerId: string, h3Index: string) => {
+    await SessionService.likePeer(peerId, h3Index);
+    setState(SessionService.getState());
+  }, []);
+
+  const passPeer = useCallback(async (peerId: string, h3Index: string) => {
+    await SessionService.passPeer(peerId, h3Index);
+    setState(SessionService.getState());
+  }, []);
+
   return {
     status: state.status,
     accountId: state.accountId,
@@ -50,5 +54,7 @@ export function useSession() {
     start,
     stop,
     refresh,
+    likePeer,
+    passPeer,
   };
 }

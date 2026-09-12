@@ -78,7 +78,7 @@ export const MessagingService = {
 
     // Send delivered ACK
     const ack: MessageAckPayload = { messageId: payload.messageId, status: 'delivered' };
-    await ProtocolService.send(roomId, MessageType.MESSAGE_ACK, ack, accountId, privateKey, fromPeerId);
+    await ProtocolService.send(roomId, MessageType.MESSAGE_ACK, ack, accountId, privateKey, _transportPeerId ?? fromAccountId);
 
     logger.info('Message received', { messageId: payload.messageId });
     return message;

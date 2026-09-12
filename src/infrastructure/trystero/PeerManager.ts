@@ -31,9 +31,16 @@ export class PeerManager {
   }
 
   /** Returns true only when the peer has left its final room. */
-  onPeerLeft(peerId: string, roomId: string): boolean {
+  onPeerLeft(peerId: string, roomId?: string): boolean {
     const existing = this.peers.get(peerId);
     if (!existing) return true;
+    // Without a roomId (legacy callers such as SafetyService/tests),
+    // remove the peer completely. With a roomId, remove only that room.
+    if (roomId === undefined) {
+      this.peers.delete(peerId);
+      logger.info('Peer disconnected', { peerId });
+      return true;
+    }
     existing.roomIds.delete(roomId);
     if (existing.roomIds.size > 0) {
       existing.roomId = [...existing.roomIds][0];
