@@ -45,19 +45,9 @@ async function deriveSigningKey(entropyBase64: string): Promise<CryptoKey> {
   return keyPair.privateKey;
 }
 
-function getRoomForPeer(_peerId: string): string | undefined {
-  // Ask the active strategy for the peer's room via the WebTorrent transport if available
+function getRoomForPeer(peerId: string): string | undefined {
   const strategy = DiscoveryStrategyRegistry.get();
-  const rooms = strategy.getRoomIds();
-  // Discover is async; for sync lookup we check each room's known peers
-  // WebTorrentStrategy exposes this via the underlying transport — fall back gracefully
-  for (const roomId of rooms) {
-    // strategy.discover() is async; use a sync best-effort via the transport directly
-    // This is only used for signing context — undefined is safe (packet is still sent)
-    void roomId;
-  }
-  // For now return undefined — callers handle undefined gracefully
-  return undefined;
+  return strategy.getRoomsForPeer?.(peerId)[0];
 }
 
 export const SessionService = {
@@ -81,14 +71,8 @@ export const SessionService = {
       // Join discovery rooms
       const ctx = await DiscoveryService.startDiscovery(identity.id);
 
-      // Broadcast HELLO to all active rooms
-      for (const roomId of ctx.activeRooms) {
-        await HandshakeService.broadcastHello(
-          roomId, identity.id, publicKey, device.id, privateKey, profile?.displayName,
-        );
-      }
-
-      // Start all listeners
+      // Start listeners BEFORE sending HELLO. This avoids dropping the first
+      // identity packet when the other peer is already connected.
       const strategy = DiscoveryStrategyRegistry.get();
       _unsubscribers = [
         HandshakeService.startListening(identity.id, privateKey, getRoomForPeer),
@@ -99,18 +83,30 @@ export const SessionService = {
         MatchingService.onLike(identity.id, privateKey, '', getRoomForPeer),
         MatchingService.onMatch(() => {}),
         MessageSyncService.startListening(identity.id, privateKey, getRoomForPeer),
-        strategy.onPeerJoin((peerId, roomId) =>
-          ConnectionService.onPeerConnected(peerId, roomId, identity.id, privateKey),
-        ),
+        strategy.onPeerJoin((peerId, roomId) => {
+          ConnectionService.onPeerConnected(peerId, roomId, identity.id, privateKey);
+          // A peer that joins after our initial announcement still needs our
+          // identity. Send HELLO directly to the newly connected peer.
+          void HandshakeService.broadcastHello(
+            roomId, identity.id, publicKey, device.id, privateKey, profile?.displayName,
+          );
+        }),
         strategy.onPeerLeave((peerId) =>
           ConnectionService.onPeerDisconnected(peerId),
         ),
       ];
 
-      // Refresh peer count every 5s
+      // Announce on every active room after listeners are ready.
+      for (const roomId of ctx.activeRooms) {
+        await HandshakeService.broadcastHello(
+          roomId, identity.id, publicKey, device.id, privateKey, profile?.displayName,
+        );
+      }
+
+      // Refresh peer count every 1s so the session state becomes live quickly.
       _peerCountInterval = setInterval(() => {
         _state = { ..._state, ...DiscoveryService.getContext() };
-      }, 5_000);
+      }, 1_000);
 
       _state = {
         status: 'active',

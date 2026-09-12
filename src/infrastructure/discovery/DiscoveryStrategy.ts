@@ -40,4 +40,7 @@ export interface DiscoveryStrategy {
 
   /** Returns the number of currently connected peers across all rooms. */
   getPeerCount(): number;
+
+  /** Returns rooms currently shared with a peer, when supported by the strategy. */
+  getRoomsForPeer?(peerId: string): string[];
 }

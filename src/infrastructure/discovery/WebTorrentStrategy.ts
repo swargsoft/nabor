@@ -59,4 +59,8 @@ export class WebTorrentStrategy implements DiscoveryStrategy {
   getPeerCount(): number {
     return this.transport.peers.getPeerCount();
   }
+
+  getRoomsForPeer(peerId: string): string[] {
+    return this.transport.getRoomsForPeer(peerId);
+  }
 }

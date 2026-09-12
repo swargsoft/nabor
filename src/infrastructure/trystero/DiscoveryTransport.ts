@@ -37,7 +37,7 @@ export class DiscoveryTransport {
         this.peerJoinHandlers.forEach((h) => h(peerId, roomId));
       },
       (peerId) => {
-        this.peers.onPeerLeft(peerId);
+        this.peers.onPeerLeft(peerId, roomId);
         this.peerLeaveHandlers.forEach((h) => h(peerId));
       },
     );
@@ -101,6 +101,10 @@ export class DiscoveryTransport {
 
   isInRoom(roomId: string): boolean {
     return this.roomManager.isInRoom(roomId);
+  }
+
+  getRoomsForPeer(peerId: string): string[] {
+    return this.peers.getRoomsForPeer(peerId);
   }
 }
 

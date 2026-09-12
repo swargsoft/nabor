@@ -2,12 +2,24 @@ import { useCallback, useEffect, useState } from 'react';
 import { SessionService, type SessionState } from '@/services/SessionService';
 import type { Identity, Device, Profile } from '@/types/db';
 
+/**
+ * React facade for the singleton SessionService.
+ *
+ * The important bit here is that SessionService owns the live P2P state, while
+ * React owns a snapshot of that state. Polling the singleton keeps the UI in
+ * sync when peers join/leave after the session has already started.
+ */
 export function useSession() {
   const [state, setState] = useState<SessionState>(SessionService.getState());
 
-  // Sync state from service on mount and keep in sync
   useEffect(() => {
-    setState(SessionService.getState());
+    const sync = () => setState(SessionService.getState());
+
+    // Sync immediately, then keep the Discover screen live.
+    sync();
+    const interval = window.setInterval(sync, 1_000);
+
+    return () => window.clearInterval(interval);
   }, []);
 
   const start = useCallback(async (identity: Identity, device: Device, profile?: Profile) => {

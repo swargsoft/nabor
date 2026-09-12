@@ -55,7 +55,7 @@ export default function DiscoverPage() {
             {status === 'active' && (
               <>
                 <Chip label={`${activeRooms.length} rooms`} size="small" variant="outlined" />
-                <Chip label={`${peerCount} peers`} size="small" variant="outlined" />
+                <Chip label={`${peerCount} peers`} size="small" variant="outlined" color={peerCount > 0 ? 'success' : 'default'} />
               </>
             )}
           </Stack>
@@ -79,6 +79,12 @@ export default function DiscoverPage() {
           <Button variant="outlined" size="large" color="error" onClick={stop}>
             Stop session
           </Button>
+        )}
+
+        {status === 'active' && peerCount === 0 && (
+          <Typography variant="body2" color="text.secondary">
+            Waiting for nearby people… Keep this screen open on both devices.
+          </Typography>
         )}
 
         {error && (
