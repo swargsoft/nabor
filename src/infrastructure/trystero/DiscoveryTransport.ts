@@ -5,7 +5,7 @@ import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('DiscoveryTransport');
 
-const APP_ID = 'nabor-v1';
+const APP_ID = 'swargsoft-nabor-v1';
 
 export type IncomingDataHandler = (data: JsonValue, peerId: string, roomId: string) => void;
 export type PeerEventHandler = (peerId: string, roomId: string) => void;
@@ -76,13 +76,17 @@ export class DiscoveryTransport {
   /** Registers a handler called when any peer joins any room. */
   onPeerJoin(handler: PeerEventHandler): () => void {
     this.peerJoinHandlers.push(handler);
-    return () => { this.peerJoinHandlers = this.peerJoinHandlers.filter((h) => h !== handler); };
+    return () => {
+      this.peerJoinHandlers = this.peerJoinHandlers.filter((h) => h !== handler);
+    };
   }
 
   /** Registers a handler called when any peer leaves any room. */
   onPeerLeave(handler: PeerLeaveHandler): () => void {
     this.peerLeaveHandlers.push(handler);
-    return () => { this.peerLeaveHandlers = this.peerLeaveHandlers.filter((h) => h !== handler); };
+    return () => {
+      this.peerLeaveHandlers = this.peerLeaveHandlers.filter((h) => h !== handler);
+    };
   }
 
   /**
