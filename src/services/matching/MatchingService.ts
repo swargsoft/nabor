@@ -7,6 +7,7 @@ import type { LikePayload, PassPayload, MatchPayload } from '@/types/protocol';
 import type { Match, Conversation } from '@/types/db';
 import { createLogger } from '@/utils/logger';
 import { ProfileExchangeService } from '@/services/profile/ProfileExchangeService';
+import { getConversationId } from '@/services/messaging/ConversationId';
 
 const logger = createLogger('MatchingService');
 
@@ -29,24 +30,18 @@ export const MatchingService = {
     targetPeerId: string = targetId,
   ): Promise<MatchResult | null> {
     const payload: LikePayload = { targetId };
-
-    // Persist our LIKE before checking for a mutual LIKE. This closes a race
-    // where both peers press Like at nearly the same time and both checks run
-    // before the other peer's pending LIKE has been written.
-    await DiscoveryService.recordLike(targetId, h3Index);
-    await MatchingService._savePendingLike(accountId, targetId);
-
-    // Send the LIKE over the already-connected P2P channel.
     await ProtocolService.send(roomId, MessageType.LIKE, payload, accountId, privateKey, targetPeerId);
+    await DiscoveryService.recordLike(targetId, h3Index);
     logger.info('LIKE sent', { targetId });
 
-    // Check for mutual like after our own pending LIKE is durable. If the peer
-    // has already liked us, this side creates the match immediately.
+    // Check for mutual like — if target already liked us, it's a match
     const theirLike = await MatchRepository.get(`${targetId}:${accountId}`);
     if (theirLike?.status === 'pending') {
       return MatchingService._createMatch(accountId, targetId, roomId, privateKey, targetPeerId);
     }
 
+    // Record our pending like for the other side to detect
+    await MatchingService._savePendingLike(accountId, targetId);
     return null;
   },
 
@@ -166,7 +161,7 @@ export const MatchingService = {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    const conversationId = [accountId, fromAccountId].sort().join(':');
+    const conversationId = await getConversationId(accountId, fromAccountId);
     const conversation: Conversation = {
       id: conversationId,
       matchId,
@@ -202,16 +197,8 @@ export const MatchingService = {
     privateKey: CryptoKey,
     targetPeerId: string = peerId,
   ): Promise<MatchResult> {
-    // Match creation can be reached from both the local LIKE path and the
-    // incoming LIKE path at the same time. Make it idempotent.
-    const existing = await MatchRepository.get(`${accountId}:${peerId}`);
-    if (existing?.status === 'matched') {
-      const existingConversation = await ConversationRepository.getByMatchId(existing.id);
-      if (existingConversation) return { match: existing, conversation: existingConversation };
-    }
-
     const now = Date.now();
-    const conversationId = [accountId, peerId].sort().join(':');
+    const conversationId = await getConversationId(accountId, peerId);
 
     const match: Match = {
       id: `${accountId}:${peerId}`,
@@ -235,14 +222,9 @@ export const MatchingService = {
     await MatchRepository.save(match);
     await ConversationRepository.save(conversation);
 
-    // Notify the peer immediately after the local match is durable. The local
-    // session emits its own notification as soon as _createMatch resolves.
-    // Trystero's data channel is reliable, so this is a fire-and-forget P2P
-    // notification; a failure must not delay the local match UI.
+    // Notify the peer of the mutual match
     const matchPayload: MatchPayload = { targetId: peerId, conversationId };
-    void ProtocolService.send(roomId, MessageType.MATCH, matchPayload, accountId, privateKey, targetPeerId)
-      .then(() => logger.debug('MATCH notification sent', { peerId, conversationId }))
-      .catch((err) => logger.warn('MATCH notification send failed', { peerId, conversationId, error: String(err) }));
+    await ProtocolService.send(roomId, MessageType.MATCH, matchPayload, accountId, privateKey, targetPeerId);
 
     logger.info('Mutual match created', { accountId, peerId, conversationId });
     return { match, conversation };

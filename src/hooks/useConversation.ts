@@ -6,6 +6,8 @@ import { discoveryTransport } from '@/infrastructure/trystero/DiscoveryTransport
 import { ProfileExchangeService } from '@/services/profile/ProfileExchangeService';
 import { deriveKeyPairFromSeed } from '@/infrastructure/crypto/webcrypto';
 import type { Conversation, Message } from '@/types/db';
+import { getConversationId, isCanonicalConversationId } from '@/services/messaging/ConversationId';
+import { MessageRepository } from '@/repositories/MessageRepository';
 
 function base64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
@@ -19,22 +21,90 @@ export function useConversation(conversationId: string | undefined) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [effectiveConversationId, setEffectiveConversationId] = useState<string | undefined>(conversationId);
   const unsubRef = useRef<(() => void) | null>(null);
 
   const reload = useCallback(async () => {
-    if (!conversationId) return;
-    const msgs = await MessagingService.getMessages(conversationId);
+    const id = effectiveConversationId ?? conversationId;
+    if (!id) return;
+    const msgs = await MessagingService.getMessages(id);
     setMessages(msgs);
-  }, [conversationId]);
+  }, [conversationId, effectiveConversationId]);
 
   useEffect(() => {
-    if (!conversationId) { setLoading(false); return; }
-    ConversationRepository.get(conversationId).then((conv) => {
-      setConversation(conv ?? null);
-      setLoading(false);
-    });
-    reload();
-  }, [conversationId, reload]);
+    let cancelled = false;
+
+    const resolveConversation = async () => {
+      if (!conversationId) {
+        setConversation(null);
+        setEffectiveConversationId(undefined);
+        setLoading(false);
+        return;
+      }
+
+      const conv = await ConversationRepository.get(conversationId);
+      if (!conv) {
+        if (!cancelled) {
+          setConversation(null);
+          setEffectiveConversationId(conversationId);
+          setLoading(false);
+          setMessages([]);
+        }
+        return;
+      }
+
+      // Older builds used accountA:accountB as the conversation id.
+      // Migrate that local conversation to the canonical 32-hex id before
+      // sending anything, otherwise strict payload validation rejects it.
+      let resolved = conv;
+      let resolvedId = conv.id;
+      if (!isCanonicalConversationId(conv.id)) {
+        const state = SessionService.getState();
+        if (state.accountId && conv.peerId && state.accountId !== conv.peerId) {
+          const canonicalId = await getConversationId(state.accountId, conv.peerId);
+          const canonical = await ConversationRepository.get(canonicalId);
+
+          if (!canonical) {
+            const oldMessages = await MessageRepository.getForConversation(conv.id);
+            for (const message of oldMessages) {
+              await MessageRepository.save({ ...message, conversationId: canonicalId });
+            }
+            resolved = { ...conv, id: canonicalId };
+            await ConversationRepository.save(resolved);
+          } else {
+            // Merge legacy messages into the canonical conversation before
+            // removing the old id, without overwriting messages that already exist.
+            const oldMessages = await MessageRepository.getForConversation(conv.id);
+            const existingMessages = await MessageRepository.getForConversation(canonicalId);
+            const existingIds = new Set(existingMessages.map((m) => m.id));
+            for (const message of oldMessages) {
+              if (!existingIds.has(message.id)) {
+                await MessageRepository.save({ ...message, conversationId: canonicalId });
+              }
+            }
+            resolved = canonical;
+          }
+
+          if (conv.id !== canonicalId) {
+            await ConversationRepository.delete(conv.id);
+            await MessageRepository.deleteForConversation(conv.id);
+          }
+          resolvedId = canonicalId;
+        }
+      }
+
+      if (!cancelled) {
+        setConversation(resolved);
+        setEffectiveConversationId(resolvedId);
+        setLoading(false);
+        const msgs = await MessagingService.getMessages(resolvedId);
+        if (!cancelled) setMessages(msgs);
+      }
+    };
+
+    void resolveConversation();
+    return () => { cancelled = true; };
+  }, [conversationId]);
 
   // Subscribe to incoming messages for this conversation
   useEffect(() => {
@@ -42,15 +112,16 @@ export function useConversation(conversationId: string | undefined) {
     if (state.status !== 'active') return;
 
     const unsubMessage = MessagingService.onMessageReceived((message) => {
-      if (message.conversationId === conversationId) void reload();
+      if (message.conversationId === effectiveConversationId) void reload();
     });
     const unsubAck = MessagingService.onAck(async () => { await reload(); });
     unsubRef.current = () => { unsubMessage(); unsubAck(); };
     return () => { unsubRef.current?.(); unsubRef.current = null; };
-  }, [reload]);
+  }, [reload, effectiveConversationId]);
 
   const send = useCallback(async (text: string) => {
-    if (!conversationId || !conversation) return;
+    const id = effectiveConversationId ?? conversationId;
+    if (!id || !conversation) return;
     const state = SessionService.getState();
     if (state.status !== 'active' || !state.accountId) return;
 
@@ -72,13 +143,13 @@ export function useConversation(conversationId: string | undefined) {
     setSending(true);
     try {
       const msg = await MessagingService.sendMessage(
-        roomId, identity, privateKey, conversationId, targetPeerId, text,
+        roomId, identity, privateKey, id, targetPeerId, text,
       );
       setMessages((prev) => [...prev.filter((m) => m.id !== msg.id), msg]);
     } finally {
       setSending(false);
     }
-  }, [conversationId, conversation]);
+  }, [conversationId, effectiveConversationId, conversation]);
 
   const markRead = useCallback(async (messageId: string) => {
     if (!conversation) return;
