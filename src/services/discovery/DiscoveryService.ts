@@ -71,6 +71,12 @@ export const DiscoveryService = {
     return DiscoveryRepository.getByStatus('seen');
   },
 
+  /** A swipe is permanent for this local account/device until storage is cleared. */
+  async isDismissed(peerId: string): Promise<boolean> {
+    const entry = await DiscoveryRepository.get(peerId);
+    return entry?.status === 'liked' || entry?.status === 'passed';
+  },
+
   async getPeersInCell(h3Index: string): Promise<Discovery[]> {
     return DiscoveryRepository.getByH3Index(h3Index);
   },

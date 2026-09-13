@@ -91,7 +91,7 @@ export default function ChatPage() {
   const peerProfile = conversation
     ? ProfileExchangeService.getCachedProfile(conversation.peerId)
     : null;
-  const peerName = peerProfile?.displayName ?? conversation?.peerId.slice(0, 8) ?? '…';
+  const peerName = peerProfile?.displayName ?? conversation?.peerName ?? conversation?.peerId.slice(0, 8) ?? '…';
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {

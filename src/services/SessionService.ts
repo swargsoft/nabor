@@ -37,6 +37,16 @@ let _unsubscribers: Array<() => void> = [];
 let _peerCountInterval: ReturnType<typeof setInterval> | null = null;
 let _privateKey: CryptoKey | null = null;
 
+export type SessionEvent =
+  | { type: 'like_received'; peerAccountId: string; peerId: string; displayName?: string }
+  | { type: 'match'; peerAccountId: string; peerId: string; displayName?: string; conversationId: string }
+  | { type: 'message_received'; message: import('@/types/db').Message };
+
+const _eventListeners = new Set<(event: SessionEvent) => void>();
+function emitEvent(event: SessionEvent): void {
+  _eventListeners.forEach((listener) => listener(event));
+}
+
 /** Derives the CryptoKey from raw base64 entropy stored in identity.privateKey. */
 async function deriveSigningKey(entropyBase64: string): Promise<CryptoKey> {
   const binary = atob(entropyBase64);
@@ -79,11 +89,30 @@ export const SessionService = {
         HandshakeService.startListening(identity.id, privateKey, getRoomForPeer),
         ProfileExchangeService.startListening(identity.id, privateKey, getRoomForPeer),
         MediaExchangeService.startListening(identity.id, privateKey, getRoomForPeer),
-        MessagingService.onMessage(identity.id, privateKey, getRoomForPeer, () => {}),
+        MessagingService.onMessage(identity.id, privateKey, getRoomForPeer, (message) => {
+          emitEvent({ type: 'message_received', message });
+        }),
         MessagingService.onAck(),
-        MatchingService.onLike(identity.id, privateKey, '', getRoomForPeer),
-        MatchingService.onMatch((payload, fromPeerId, fromAccountId) => {
-          MatchingService.acceptIncomingMatch(identity.id, payload, fromAccountId);
+        MatchingService.onLike(
+          identity.id,
+          privateKey,
+          '',
+          getRoomForPeer,
+          (result) => {
+            const displayName = ProfileExchangeService.getCachedProfile(result.match.peerId)?.displayName;
+            emitEvent({ type: 'match', peerAccountId: result.match.peerId, peerId: result.match.peerId, displayName, conversationId: result.conversation.id });
+          },
+          (fromAccountId, fromPeerId) => {
+            const displayName = ProfileExchangeService.getCachedProfile(fromPeerId)?.displayName;
+            emitEvent({ type: 'like_received', peerAccountId: fromAccountId, peerId: fromPeerId, displayName });
+          },
+        ),
+        MatchingService.onMatchDetailed(async (payload, fromPeerId, fromAccountId) => {
+          const result = await MatchingService.acceptIncomingMatch(identity.id, payload, fromAccountId, fromPeerId);
+          if (result) {
+            const displayName = result.conversation.peerName ?? ProfileExchangeService.getCachedProfile(fromPeerId)?.displayName;
+            emitEvent({ type: 'match', peerAccountId: fromAccountId, peerId: fromPeerId, displayName, conversationId: result.conversation.id });
+          }
           logger.info('MATCH received', { fromPeerId, fromAccountId, conversationId: payload.conversationId });
         }),
         MessageSyncService.startListening(identity.id, privateKey, getRoomForPeer),
@@ -146,6 +175,11 @@ export const SessionService = {
     logger.info('Session stopped');
   },
 
+  onEvent(listener: (event: SessionEvent) => void): () => void {
+    _eventListeners.add(listener);
+    return () => _eventListeners.delete(listener);
+  },
+
   getState(): SessionState {
     return _state;
   },
@@ -164,7 +198,16 @@ export const SessionService = {
     const roomId = strategy.getRoomForPeer?.(peerId);
     const discovered = ProfileExchangeService.getCachedProfiles().find((entry) => entry.peerId === peerId);
     if (!roomId || !discovered) throw new Error('Peer is no longer connected');
-    await MatchingService.sendLike(roomId, _state.accountId, _privateKey, discovered.profile.accountId, h3Index, peerId);
+    const result = await MatchingService.sendLike(roomId, _state.accountId, _privateKey, discovered.profile.accountId, h3Index, peerId);
+    if (result) {
+      emitEvent({
+        type: 'match',
+        peerAccountId: result.match.peerId,
+        peerId,
+        displayName: discovered.profile.displayName,
+        conversationId: result.conversation.id,
+      });
+    }
   },
 
   async passPeer(peerId: string, h3Index: string): Promise<void> {

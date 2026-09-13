@@ -2,11 +2,11 @@ import { ProtocolService } from '@/services/messaging/ProtocolService';
 import { DiscoveryService } from '@/services/discovery/DiscoveryService';
 import { MatchRepository } from '@/repositories/MatchRepository';
 import { ConversationRepository } from '@/repositories/ConversationRepository';
-import { generateId } from '@/infrastructure/crypto/webcrypto';
 import { MessageType } from '@/types/protocol';
 import type { LikePayload, PassPayload, MatchPayload } from '@/types/protocol';
 import type { Match, Conversation } from '@/types/db';
 import { createLogger } from '@/utils/logger';
+import { ProfileExchangeService } from '@/services/profile/ProfileExchangeService';
 
 const logger = createLogger('MatchingService');
 
@@ -29,18 +29,24 @@ export const MatchingService = {
     targetPeerId: string = targetId,
   ): Promise<MatchResult | null> {
     const payload: LikePayload = { targetId };
-    await ProtocolService.send(roomId, MessageType.LIKE, payload, accountId, privateKey, targetPeerId);
+
+    // Persist our LIKE before checking for a mutual LIKE. This closes a race
+    // where both peers press Like at nearly the same time and both checks run
+    // before the other peer's pending LIKE has been written.
     await DiscoveryService.recordLike(targetId, h3Index);
+    await MatchingService._savePendingLike(accountId, targetId);
+
+    // Send the LIKE over the already-connected P2P channel.
+    await ProtocolService.send(roomId, MessageType.LIKE, payload, accountId, privateKey, targetPeerId);
     logger.info('LIKE sent', { targetId });
 
-    // Check for mutual like — if target already liked us, it's a match
+    // Check for mutual like after our own pending LIKE is durable. If the peer
+    // has already liked us, this side creates the match immediately.
     const theirLike = await MatchRepository.get(`${targetId}:${accountId}`);
     if (theirLike?.status === 'pending') {
       return MatchingService._createMatch(accountId, targetId, roomId, privateKey, targetPeerId);
     }
 
-    // Record our pending like for the other side to detect
-    await MatchingService._savePendingLike(accountId, targetId);
     return null;
   },
 
@@ -102,6 +108,7 @@ export const MatchingService = {
     h3Index: string,
     getRoomForPeer: (peerId: string) => string | undefined,
     onMatch?: (result: MatchResult) => void,
+    onIncomingLike?: (fromAccountId: string, fromPeerId: string) => void,
   ): () => void {
     return ProtocolService.onMessage<LikePayload>(
       MessageType.LIKE,
@@ -112,6 +119,7 @@ export const MatchingService = {
         const result = await MatchingService.handleIncomingLike(
           roomId, accountId, privateKey, packet.senderId, peerId, h3Index,
         );
+        if (!result) onIncomingLike?.(packet.senderId, peerId);
         if (result) onMatch?.(result);
       },
     );
@@ -121,7 +129,16 @@ export const MatchingService = {
    * Registers a listener for incoming MATCH packets (sent by the other side on mutual like).
    * Returns unsubscribe function.
    */
-  onMatch(handler: (payload: MatchPayload, fromPeerId: string, fromAccountId: string) => void): () => void {
+  /** Backward-compatible MATCH listener. */
+  onMatch(handler: (payload: MatchPayload, fromPeerId: string) => void): () => void {
+    return ProtocolService.onMessage<MatchPayload>(
+      MessageType.MATCH,
+      ({ packet, peerId }) => handler(packet.payload, peerId),
+    );
+  },
+
+  /** Detailed MATCH listener used by the session layer. */
+  onMatchDetailed(handler: (payload: MatchPayload, fromPeerId: string, fromAccountId: string) => void): () => void {
     return ProtocolService.onMessage<MatchPayload>(
       MessageType.MATCH,
       ({ packet, peerId }) => handler(packet.payload, peerId, packet.senderId),
@@ -133,6 +150,7 @@ export const MatchingService = {
     accountId: string,
     payload: MatchPayload,
     fromAccountId: string,
+    fromPeerId: string = fromAccountId,
   ): Promise<MatchResult | null> {
     if (payload.targetId !== accountId || !fromAccountId || fromAccountId === accountId) return null;
     const matchId = `${accountId}:${fromAccountId}`;
@@ -148,16 +166,18 @@ export const MatchingService = {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
+    const conversationId = [accountId, fromAccountId].sort().join(':');
     const conversation: Conversation = {
-      id: payload.conversationId,
+      id: conversationId,
       matchId,
       peerId: fromAccountId,
+      peerName: ProfileExchangeService.getCachedProfile(fromPeerId)?.displayName,
       lastMessageAt: now,
       createdAt: now,
     };
     await MatchRepository.save(match);
     await ConversationRepository.save(conversation);
-    logger.info('Incoming mutual match accepted', { accountId, peerId: fromAccountId, conversationId: payload.conversationId });
+    logger.info('Incoming mutual match accepted', { accountId, peerId: fromAccountId, conversationId });
     return { match, conversation };
   },
 
@@ -182,8 +202,16 @@ export const MatchingService = {
     privateKey: CryptoKey,
     targetPeerId: string = peerId,
   ): Promise<MatchResult> {
+    // Match creation can be reached from both the local LIKE path and the
+    // incoming LIKE path at the same time. Make it idempotent.
+    const existing = await MatchRepository.get(`${accountId}:${peerId}`);
+    if (existing?.status === 'matched') {
+      const existingConversation = await ConversationRepository.getByMatchId(existing.id);
+      if (existingConversation) return { match: existing, conversation: existingConversation };
+    }
+
     const now = Date.now();
-    const conversationId = generateId();
+    const conversationId = [accountId, peerId].sort().join(':');
 
     const match: Match = {
       id: `${accountId}:${peerId}`,
@@ -198,6 +226,8 @@ export const MatchingService = {
       id: conversationId,
       matchId: match.id,
       peerId,
+      peerName: ProfileExchangeService.getCachedProfile(targetPeerId)?.displayName
+        ?? ProfileExchangeService.getCachedProfile(peerId)?.displayName,
       lastMessageAt: now,
       createdAt: now,
     };
@@ -205,9 +235,14 @@ export const MatchingService = {
     await MatchRepository.save(match);
     await ConversationRepository.save(conversation);
 
-    // Notify the peer of the mutual match
+    // Notify the peer immediately after the local match is durable. The local
+    // session emits its own notification as soon as _createMatch resolves.
+    // Trystero's data channel is reliable, so this is a fire-and-forget P2P
+    // notification; a failure must not delay the local match UI.
     const matchPayload: MatchPayload = { targetId: peerId, conversationId };
-    await ProtocolService.send(roomId, MessageType.MATCH, matchPayload, accountId, privateKey, targetPeerId);
+    void ProtocolService.send(roomId, MessageType.MATCH, matchPayload, accountId, privateKey, targetPeerId)
+      .then(() => logger.debug('MATCH notification sent', { peerId, conversationId }))
+      .catch((err) => logger.warn('MATCH notification send failed', { peerId, conversationId, error: String(err) }));
 
     logger.info('Mutual match created', { accountId, peerId, conversationId });
     return { match, conversation };

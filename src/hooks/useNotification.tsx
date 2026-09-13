@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import { SessionService } from '@/services/SessionService';
 import { Alert, Snackbar } from '@mui/material';
 
 type Severity = 'success' | 'info' | 'warning' | 'error';
@@ -22,6 +23,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const handleClose = () => setNotification(null);
+
+  // Global P2P notifications: these work regardless of which page is open.
+  useEffect(() => {
+    return SessionService.onEvent((event) => {
+      if (event.type === 'like_received') {
+        notify(event.displayName ? `${event.displayName} liked you ❤️` : 'Someone nearby liked you ❤️', 'success');
+      } else if (event.type === 'match') {
+        notify(event.displayName ? `It’s a match with ${event.displayName}! 🎉` : 'It’s a match! 🎉', 'success');
+      } else if (event.type === 'message_received') {
+        notify('New message received 💬', 'info');
+      }
+    });
+  }, [notify]);
 
   return (
     <NotificationContext.Provider value={{ notify }}>

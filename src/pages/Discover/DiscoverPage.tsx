@@ -6,6 +6,8 @@ import { useLocation } from '@/hooks/useLocation';
 import { useNotification } from '@/hooks/useNotification';
 import { useProfile } from '@/hooks/useProfile';
 import { ProfileExchangeService, type DiscoveredProfile } from '@/services/profile/ProfileExchangeService';
+import { DiscoveryService } from '@/services/discovery/DiscoveryService';
+import { SessionService } from '@/services/SessionService';
 
 export default function DiscoverPage() {
   const { identity } = useIdentity();
@@ -18,14 +20,30 @@ export default function DiscoverPage() {
   const [busyPeer, setBusyPeer] = useState<string | null>(null);
 
   useEffect(() => {
-    const refresh = () => setProfiles(ProfileExchangeService.getCachedProfiles().filter((p) => p.profile.accountId !== accountId));
-    refresh();
-    return ProfileExchangeService.onChange(refresh);
+    let disposed = false;
+    const refresh = async () => {
+      const cached = ProfileExchangeService.getCachedProfiles().filter((p) => p.profile.accountId !== accountId);
+      const visible: DiscoveredProfile[] = [];
+      for (const entry of cached) {
+        if (!(await DiscoveryService.isDismissed(entry.profile.accountId))) visible.push(entry);
+      }
+      if (!disposed) setProfiles(visible);
+    };
+    void refresh();
+    const unsubProfile = ProfileExchangeService.onChange(() => void refresh());
+    const unsubSession = SessionService.onEvent((event) => {
+      if (event.type === 'match' || event.type === 'like_received') void refresh();
+    });
+    return () => { disposed = true; unsubProfile(); unsubSession(); };
   }, [accountId]);
 
   useEffect(() => {
     if (status !== 'active') return;
-    const timer = window.setInterval(() => setProfiles(ProfileExchangeService.getCachedProfiles().filter((p) => p.profile.accountId !== accountId)), 1000);
+    const timer = window.setInterval(() => {
+      const cached = ProfileExchangeService.getCachedProfiles().filter((p) => p.profile.accountId !== accountId);
+      Promise.all(cached.map(async (entry) => (await DiscoveryService.isDismissed(entry.profile.accountId)) ? null : entry))
+        .then((items) => setProfiles(items.filter((x): x is DiscoveredProfile => x !== null)));
+    }, 1000);
     return () => window.clearInterval(timer);
   }, [status, accountId]);
 

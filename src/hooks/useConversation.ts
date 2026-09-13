@@ -41,8 +41,12 @@ export function useConversation(conversationId: string | undefined) {
     const state = SessionService.getState();
     if (state.status !== 'active') return;
 
-    unsubRef.current = MessagingService.onAck(async () => { await reload(); });
-    return () => { unsubRef.current?.(); };
+    const unsubMessage = MessagingService.onMessageReceived((message) => {
+      if (message.conversationId === conversationId) void reload();
+    });
+    const unsubAck = MessagingService.onAck(async () => { await reload(); });
+    unsubRef.current = () => { unsubMessage(); unsubAck(); };
+    return () => { unsubRef.current?.(); unsubRef.current = null; };
   }, [reload]);
 
   const send = useCallback(async (text: string) => {

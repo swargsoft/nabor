@@ -64,7 +64,7 @@ export default function MatchesPage() {
       </Typography>
       <List disablePadding>
         {entries.map(({ match, conversation, peerProfile }, i) => {
-          const name = peerProfile?.displayName ?? match.peerId.slice(0, 8);
+          const name = peerProfile?.displayName ?? conversation.peerName ?? match.peerId.slice(0, 8);
           const initials = name.slice(0, 2).toUpperCase();
           return (
             <Box key={match.id}>

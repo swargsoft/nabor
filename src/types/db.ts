@@ -53,6 +53,8 @@ export interface Conversation {
   id: string;
   matchId: string;
   peerId: string;
+  /** Cached remote display name so Matches/Chat still have a name after discovery cache is cleared. */
+  peerName?: string;
   lastMessageAt: number;
   createdAt: number;
 }

@@ -1,6 +1,7 @@
 import { ProtocolService } from '@/services/messaging/ProtocolService';
 import { MessageRepository } from '@/repositories/MessageRepository';
 import { ConversationRepository } from '@/repositories/ConversationRepository';
+import { MatchRepository } from '@/repositories/MatchRepository';
 import { generateId } from '@/infrastructure/crypto/webcrypto';
 import { validateMessagePayload } from '@/infrastructure/security/SecurityGuard';
 import { MessageType } from '@/types/protocol';
@@ -9,6 +10,8 @@ import type { Message, MessageStatus } from '@/types/db';
 import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('MessagingService');
+
+const messageListeners = new Set<(message: Message) => void>();
 
 export const MessagingService = {
   /**
@@ -64,9 +67,23 @@ export const MessagingService = {
     if (!guard.valid) throw new Error(`Invalid message payload: ${guard.reason}`);
 
     const now = Date.now();
+
+    // Conversation IDs are deterministic for new matches, but older builds used
+    // random IDs. Resolve by the authenticated sender so a legacy message still
+    // appears in the correct local chat.
+    let localConversationId = payload.conversationId;
+    const directConversation = await ConversationRepository.get(localConversationId);
+    if (!directConversation) {
+      const localMatch = await MatchRepository.get(`${accountId}:${fromAccountId}`);
+      if (localMatch) {
+        const localConversation = await ConversationRepository.getByMatchId(localMatch.id);
+        if (localConversation) localConversationId = localConversation.id;
+      }
+    }
+
     const message: Message = {
       id: payload.messageId,
-      conversationId: payload.conversationId,
+      conversationId: localConversationId,
       senderId: fromAccountId,
       text: payload.text,
       status: 'delivered',
@@ -74,7 +91,11 @@ export const MessagingService = {
     };
 
     await MessageRepository.save(message);
-    await MessagingService._touchConversation(payload.conversationId, now);
+    await MessagingService._touchConversation(localConversationId, now);
+
+    // Notify any open chat/list UI immediately. The ACK alone is not enough
+    // because the recipient does not receive its own ACK packet.
+    messageListeners.forEach((listener) => listener(message));
 
     // Send delivered ACK
     const ack: MessageAckPayload = { messageId: payload.messageId, status: 'delivered' };
@@ -160,6 +181,12 @@ export const MessagingService = {
    */
   async getMessages(conversationId: string): Promise<Message[]> {
     return MessageRepository.getForConversation(conversationId);
+  },
+
+  /** Subscribes to messages received by this device. */
+  onMessageReceived(listener: (message: Message) => void): () => void {
+    messageListeners.add(listener);
+    return () => messageListeners.delete(listener);
   },
 
   // ─── Internal ──────────────────────────────────────────────────────────────
