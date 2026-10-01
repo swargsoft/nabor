@@ -32,7 +32,7 @@ export function NaborMap({ locationState, height = 300, showNeighbors = true }: 
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Update cells when locationState changes
@@ -67,7 +67,7 @@ export function NaborMap({ locationState, height = 300, showNeighbors = true }: 
       sx={{
         height,
         width: '100%',
-        borderRadius: 2,
+        borderRadius: 1,
         overflow: 'hidden',
         '& .leaflet-container': { height: '100%', width: '100%', borderRadius: 'inherit' },
       }}

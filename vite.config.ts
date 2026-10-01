@@ -8,7 +8,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'prompt',
-      includeAssets: ['icons/*.png', 'icons/*.svg'],
+      // Everything in public/ (logo, favicon, apple-touch-icon, icons/) is
+      // precached by the globPatterns below, so no separate includeAssets list
+      // is needed — listing them there duplicates the precache entries.
       manifest: false,
       workbox: {
         cacheId: 'nabor',

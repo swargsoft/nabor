@@ -90,9 +90,19 @@ src/
   types/          # Shared TypeScript types
   utils/          # Pure utility functions
 public/
-  icons/          # PWA icons (192px, 512px — any + maskable)
+  icons/               # PWA icons (192px, 512px — any + maskable)
+  nabor-logo.png       # Brand logo (transparent, 512px) used by the welcome screen
+  favicon.png          # Browser tab icon
+  apple-touch-icon.png # iOS home screen icon
   manifest.webmanifest
+scripts/
+  generate-logo-assets.py  # Regenerates the published brand assets
+  nabor-logo-master.png    # Cleaned, full-resolution logo (source of truth)
 ```
+
+Brand assets are generated from `scripts/nabor-logo-master.png` with
+`python3 scripts/generate-logo-assets.py` (requires Pillow). Pass a new image
+path to swap the artwork — see the script header for details.
 
 ---
 
